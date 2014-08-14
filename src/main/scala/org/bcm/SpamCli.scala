@@ -19,22 +19,27 @@ object SpamCli extends App {
   val presence = system.actorSelection("akka.tcp://Spam@127.0.0.1:2553/user/presence")
   val router = system.actorSelection("akka.tcp://Spam@127.0.0.1:2553/user/router")
 
-  val dave = system.actorOf(Props[UserActor])
-  presence ! RegisterUser("Dave", dave)
+  println("Please enter your Username")
+  val username = Source.stdin.getLines.next
 
-  val bob = system.actorOf(Props[UserActor])
-  presence ! RegisterUser("Bob", bob)
+  val user = system.actorOf(Props[UserActor])
+  presence ! RegisterUser(username, user)
 
-  router ! RoutingRequest("Bob", "Dave", "Howdy partner")
-  router ! RoutingRequest("Dave", "Bob", "Oh Hai")
+  presence ? GetUsers onSuccess {
+    case users: Seq[String] => { 
+      val otherUsers = users diff username
+      println(s"found users $otherUsers")
+      otherUsers.headOption foreach { listenForInput } 
+    }
+  }  
 
-  for (ln <- Source.stdin.getLines) {
-    router ! RoutingRequest("Dave", "Bob", ln)
+  def listenForInput(toUser: String) {
+    println(s"Now chatting to $toUser")
+    for (ln <- Source.stdin.getLines) {
+      router ! RoutingRequest(username, toUser, ln)
+    }
   }
 
-//  presence ? GetUsers onSuccess {
-//    case users => println(s"found users $users")    
-//  }
 
   // Listen for input from user
   // Get presence of other users every X minutes
