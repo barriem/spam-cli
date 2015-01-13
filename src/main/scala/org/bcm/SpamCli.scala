@@ -9,8 +9,8 @@ import akka.pattern.ask
 import akka.util.Timeout
 
 import org.bcm.spam.actor.UserActor
-import org.bcm.spam.payload.action.{GetUsers, Register, RoutingRequest}
-import org.bcm.spam.payload.model.{Input, Message, Presence}
+import org.bcm.spam.payload.action.{GetUsers, Register, RoutingRequest, Unregister}
+import org.bcm.spam.payload.model.{Input, Message, Output, Presence}
 
 import org.bcm.spamcli.actor.ShellOutputActor
 
@@ -20,33 +20,54 @@ object SpamCli extends App {
   val system = ActorSystem("SpamCli")
   val presence = system.actorSelection("akka.tcp://Spam@127.0.0.1:2553/user/presence")
   val router = system.actorSelection("akka.tcp://Spam@127.0.0.1:2553/user/router")
-  val outputActor = system.actorOf(Props[ShellOutputActor])
+  val output = system.actorOf(Props[ShellOutputActor])
 
-  println("Please enter your Username")
+  output ! Output("Please enter your User ID")
   val userId = Source.stdin.getLines.next
 
-  presence ? Register(userId, outputActor) onSuccess {
+  val chatToPattern = "(:c )(.*)".r
+  var chattingTo: Option[String] = None
+
+  presence ? Register(userId, output) onSuccess {
     case p: Presence => {
+      sys addShutdownHook { presence ! Unregister(userId) }
+      printUsers
       listenForInput(p.user.ref)
     }
   }
 
-  presence ? GetUsers onSuccess {
-    case users: Iterable[String] => {
-      val otherUsers = users.toSeq diff Seq(userId)
-      otherUsers.headOption foreach { id => router ! RoutingRequest(userId, id, "Welcome") }
+  def printHelp {
+    output ! Output("type :u to print a list of Online Users")
+    output ! Output("type :c [User Id] to chat to a particular User")
+    output ! Output("type :h to show this help")
+  }
+
+  def printUsers {
+    presence ? GetUsers onSuccess {
+      case users: Iterable[String] => {
+        val otherUsers = users.toSeq diff Seq(userId)
+        val usersWithIndex = otherUsers.sorted.zipWithIndex.toMap
+        val usersWithIndexPlusOne = usersWithIndex map { case (u, i) => u -> (i + 1) }
+        Output("Online Users :")
+        usersWithIndexPlusOne foreach { case (u, i) => output ! Output(s"  $i. $u") }
+      }
     }
   }
 
-  def listenForInput(userActor: ActorRef) {
-    println("[Start chatting...]")
+  def chattingTo(to: String) {
+    output ! Output(s"Now chatting to: $to")
+    chattingTo = Some(to)
+  }
+
+  def listenForInput(user: ActorRef) {
+    output ! Output("== SPAM away fine Sir ==")
     for (ln <- Source.stdin.getLines) {
-      userActor ! Input(ln)
+      ln match {
+        case ":h" => printHelp
+        case ":u" => printUsers
+        case chatToPattern(_, user) => chattingTo(user)
+        case _ => chattingTo foreach { user ! Input(_, ln) }
+      }
     }
   }
-
-  // Listen for input from user
-  // Get presence of other users every X minutes
-  // Send presence every X minutes
-  // Send messages from User
 }
