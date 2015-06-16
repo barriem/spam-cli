@@ -12,7 +12,8 @@ import org.bcm.spam.actor.UserActor
 import org.bcm.spam.payload.action.{GetUsers, Register, RoutingRequest, Unregister}
 import org.bcm.spam.payload.model.{Input, Message, Output, Presence}
 
-import org.bcm.spamcli.actor.ShellOutputActor
+import org.bcm.spamcli.actor.{ClientActor, ShellOutputActor}
+import org.bcm.spamcli.payload.action.{Login, PrintHelp, PrintUsers}
 
 object SpamCli extends App {
   implicit val timeout = Timeout(30, TimeUnit.SECONDS)
@@ -25,34 +26,15 @@ object SpamCli extends App {
   output ! Output("Please enter your User ID")
   val userId = Source.stdin.getLines.next
 
-  val chatToPattern = "(:c )(.*)".r
-  var chattingTo: Option[String] = None
-
-  presence ? Register(userId, output) onSuccess {
+  val client = system.actorOf(Props(classOf[ClientActor], userId, output, presence))
+  client ? Login onSuccess {
     case p: Presence => {
-      sys addShutdownHook { presence ! Unregister(userId) }
-      printUsers
       listenForInput(p.user.ref)
     }
   }
 
-  def printHelp {
-    output ! Output("type :u to print a list of Online Users")
-    output ! Output("type :c [User Id] to chat to a particular User")
-    output ! Output("type :h to show this help")
-  }
-
-  def printUsers {
-    presence ? GetUsers onSuccess {
-      case users: Iterable[String] => {
-        val otherUsers = users.toSeq diff Seq(userId)
-        val usersWithIndex = otherUsers.sorted.zipWithIndex.toMap
-        val usersWithIndexPlusOne = usersWithIndex map { case (u, i) => u -> (i + 1) }
-        Output("Online Users :")
-        usersWithIndexPlusOne foreach { case (u, i) => output ! Output(s"  $i. $u") }
-      }
-    }
-  }
+  val chatToPattern = "(:c )(.*)".r
+  var chattingTo: Option[String] = None
 
   def chattingTo(to: String) {
     output ! Output(s"Now chatting to: $to")
@@ -60,11 +42,12 @@ object SpamCli extends App {
   }
 
   def listenForInput(user: ActorRef) {
-    output ! Output("== SPAM away fine Sir ==")
+    output ! Output("")
+    output ! Output("== Let Spamming commence ==")
     for (ln <- Source.stdin.getLines) {
       ln match {
-        case ":h" => printHelp
-        case ":u" => printUsers
+        case ":h" => client ! PrintHelp
+        case ":u" => client ! PrintUsers
         case chatToPattern(_, user) => chattingTo(user)
         case _ => chattingTo foreach { user ! Input(_, ln) }
       }
